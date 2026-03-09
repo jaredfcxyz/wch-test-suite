@@ -397,7 +397,7 @@ app.post('/api/compare', async (req, res) => {
 });
 
 app.get('/health', (_req, res) => {
-  res.json({ ok: true, service: 'sitemap-copy-verifier', version: '1.2.0' });
+  res.json({ ok: true, service: 'wch-test-suite', version: '1.2.1' });
 });
 
 app.listen(PORT, () => {

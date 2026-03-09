@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Sitemap Copy Verifier</title>
+    <title>WCH Test Suite</title>
     <style>
       :root { color-scheme: dark; }
       body { font-family: Inter, system-ui, sans-serif; margin: 0; background: #0b1220; color: #e5e7eb; }
@@ -30,13 +30,13 @@
   </head>
   <body>
     <div class="wrap">
-      <h1>Sitemap Copy Verifier</h1>
+      <h1>WCH Test Suite</h1>
       <p class="small">Compares sitemap URLs by normalized path key, then crawls pages to check internal links/assets and report status codes (200/404/etc).</p>
 
       <div class="card">
         <div class="row">
-          <input id="urlA" placeholder="https://site-a.com" />
-          <input id="urlB" placeholder="https://site-b.com/subdir/" />
+          <input id="urlA" placeholder="https://webflow.io-site.com" />
+          <input id="urlB" placeholder="https://your-wch-url.com/subdir/" />
           <button id="runBtn">Compare</button>
         </div>
       </div>
@@ -120,8 +120,8 @@
             <div class="meta">
               <div class="pill">Total Path Keys: <strong>${s.totalKeys}</strong></div>
               <div class="pill">Present in Both: <strong>${s.presentInBoth}</strong></div>
-              <div class="pill">Only in Site A: <strong>${s.onlyInA}</strong></div>
-              <div class="pill">Only in Site B: <strong>${s.onlyInB}</strong></div>
+              <div class="pill">Only in Webflow.io: <strong>${s.onlyInA}</strong></div>
+              <div class="pill">Only in WCH URL: <strong>${s.onlyInB}</strong></div>
               <div class="pill">Copy Success Rows: <strong>${s.copySuccess}</strong></div>
               <div class="pill">Availability Failures: <strong>${s.failedAvailability}</strong></div>
             </div>
@@ -135,8 +135,8 @@
           sitemapCard.innerHTML = `
             <h3>Sitemaps Checked</h3>
             <div class="row">
-              <div style="flex:1;min-width:300px"><strong>Site A</strong><ul>${aMap || '<li>None found</li>'}</ul></div>
-              <div style="flex:1;min-width:300px"><strong>Site B</strong><ul>${bMap || '<li>None found</li>'}</ul></div>
+              <div style="flex:1;min-width:300px"><strong>Webflow.io</strong><ul>${aMap || '<li>None found</li>'}</ul></div>
+              <div style="flex:1;min-width:300px"><strong>WCH URL</strong><ul>${bMap || '<li>None found</li>'}</ul></div>
             </div>
           `;
           sitemapCard.style.display = 'block';
@@ -145,7 +145,7 @@
           table.innerHTML = `
             <thead>
               <tr>
-                <th>Path Key</th><th>Site A URL</th><th>Site B URL</th><th>A Status</th><th>B Status</th><th>Copy Result</th>
+                <th>Path Key</th><th>Webflow.io URL</th><th>WCH URL</th><th>Webflow Status</th><th>WCH Status</th><th>Copy Result</th>
               </tr>
             </thead>
             <tbody>
@@ -164,14 +164,14 @@
 
           const rs = data.referencesSummary || {};
           refSummaryCard.innerHTML = `
-            <h3>Links & Assets Summary</h3>
+            <h3>Links & Assets Summary (WCH URL Focus)</h3>
             <div class="meta">
               <div class="pill">Total Refs: <strong>${rs.totalRefs ?? 0}</strong></div>
               <div class="pill">Links: <strong>${rs.totalLinks ?? 0}</strong></div>
               <div class="pill">Assets: <strong>${rs.totalAssets ?? 0}</strong></div>
               <div class="pill">Present in Both: <strong>${rs.presentInBoth ?? 0}</strong></div>
-              <div class="pill">Only in Site A: <strong>${rs.onlyInA ?? 0}</strong></div>
-              <div class="pill">Only in Site B: <strong>${rs.onlyInB ?? 0}</strong></div>
+              <div class="pill">Only in Webflow.io: <strong>${rs.onlyInA ?? 0}</strong></div>
+              <div class="pill">Only in WCH URL: <strong>${rs.onlyInB ?? 0}</strong></div>
               <div class="pill">Copy Success: <strong>${rs.copySuccess ?? 0}</strong></div>
               <div class="pill">Availability Failures: <strong>${rs.failedAvailability ?? 0}</strong></div>
             </div>
@@ -184,19 +184,16 @@
           refsTable.innerHTML = `
             <thead>
               <tr>
-                <th>Type</th><th>Path Key</th><th>Site A URL</th><th>Site B URL</th><th>A Status</th><th>B Status</th><th>Copy Result</th>
+                <th>Type</th><th>Path Key</th><th>Webflow.io URL</th><th>WCH URL</th><th>Webflow Status</th><th>WCH Status</th><th>Copy Result</th>
               </tr>
             </thead>
             <tbody>
-              ${refRows.map(r => `
+              ${refRows.filter(r => r.inB).map(r => `
                 <tr>
                   <td>${esc(r.type)}</td>
                   <td>${esc(r.key)}</td>
-                  <td>${r.urlA ? `<a href="${esc(r.urlA)}" target="_blank">${esc(r.urlA)}</a>` : '<span class="warn">Missing</span>'}</td>
                   <td>${r.urlB ? `<a href="${esc(r.urlB)}" target="_blank">${esc(r.urlB)}</a>` : '<span class="warn">Missing</span>'}</td>
-                  <td>${r.statusA ?? '-'} ${r.availableA ? '<span class="ok">OK</span>' : (r.inA ? '<span class="bad">FAIL</span>' : '')}</td>
-                  <td>${r.statusB ?? '-'} ${r.availableB ? '<span class="ok">OK</span>' : (r.inB ? '<span class="bad">FAIL</span>' : '')}</td>
-                  <td>${r.copySuccess ? '<span class="ok">SUCCESS</span>' : '<span class="bad">NOT MATCHED</span>'}</td>
+                  <td>${r.statusB ?? '-'} ${r.availableB ? '<span class="ok">OK</span>' : '<span class="bad">FAIL</span>'}</td>
                 </tr>`).join('')}
             </tbody>
           `;
