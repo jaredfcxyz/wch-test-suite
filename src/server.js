@@ -42,6 +42,15 @@ function joinPath(basePath, suffix) {
   return `${base}${cleanSuffix}`;
 }
 
+function logInfo(message, data = null) {
+  const stamp = new Date().toISOString();
+  if (data == null) {
+    console.log(`[${stamp}] ${message}`);
+  } else {
+    console.log(`[${stamp}] ${message}`, data);
+  }
+}
+
 function parseAndStoreSetCookie(cookieStore, setCookieHeader = '') {
   if (!setCookieHeader) return;
   const pair = setCookieHeader.split(';')[0]?.trim();
@@ -115,27 +124,44 @@ async function fetchMeta(url, method = 'HEAD', siteFetch = fetch) {
   }
 }
 
+function extractHiddenField(html, fieldName, fallback = '') {
+  const rx = new RegExp(`<input[^>]*name=["']${fieldName}["'][^>]*value=["']([^"']*)["'][^>]*>`, 'i');
+  const match = String(html || '').match(rx);
+  return match?.[1] || fallback;
+}
+
 async function unlockWebflowIfNeeded(site, password, siteFetch) {
   const trimmed = password?.trim();
   if (!trimmed) return { attempted: false, unlocked: null, reason: null };
 
+  const startUrl = `${site.origin}${joinPath(site.basePath, '/')}`;
+  const firstProbe = await fetchMeta(startUrl, 'GET', siteFetch);
+  const inferredPath = extractHiddenField(firstProbe.body, 'path', site.basePath || '/');
+  const inferredPage = extractHiddenField(firstProbe.body, 'page', '/');
   const authUrl = `${site.origin}/.wf_auth`;
   const body = new URLSearchParams({
+    pass: trimmed,
     password: trimmed,
-    path: site.basePath || '/',
+    path: inferredPath,
+    page: inferredPage,
   }).toString();
 
+  logInfo('Webflow unlock attempt', { origin: site.origin, path: inferredPath });
+
   try {
-    await siteFetch(authUrl, {
+    const authRes = await siteFetch(authUrl, {
       method: 'POST',
       redirect: 'follow',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': 'SitemapCopyVerifier/1.3.0 (+OpenClaw)',
+        'User-Agent': 'SitemapCopyVerifier/1.3.1 (+OpenClaw)',
+        Referer: startUrl,
       },
       body,
     });
-  } catch {
+    logInfo('Webflow unlock POST response', { status: authRes.status });
+  } catch (error) {
+    logInfo('Webflow unlock POST failed', { error: error?.message || 'unknown' });
     return {
       attempted: true,
       unlocked: false,
@@ -143,7 +169,7 @@ async function unlockWebflowIfNeeded(site, password, siteFetch) {
     };
   }
 
-  const probe = await fetchMeta(`${site.origin}${joinPath(site.basePath, '/')}`, 'GET', siteFetch);
+  const probe = await fetchMeta(startUrl, 'GET', siteFetch);
   const bodyText = (probe.body || '').toLowerCase();
   const stillLocked =
     bodyText.includes('name="password"') &&
@@ -158,6 +184,7 @@ async function unlockWebflowIfNeeded(site, password, siteFetch) {
   }
 
   if (stillLocked) {
+    logInfo('Webflow unlock appears to have failed; lock screen still detected');
     return {
       attempted: true,
       unlocked: false,
@@ -165,6 +192,7 @@ async function unlockWebflowIfNeeded(site, password, siteFetch) {
     };
   }
 
+  logInfo('Webflow unlock success', { origin: site.origin });
   return { attempted: true, unlocked: true, reason: null };
 }
 
@@ -273,6 +301,11 @@ function getRefType(attr, url) {
   return 'link';
 }
 
+function isWebflowAssetHost(hostname = '') {
+  const h = hostname.toLowerCase();
+  return h.endsWith('website-files.com') || h.endsWith('webflow.com');
+}
+
 function normalizeRef(candidate, pageUrl, site) {
   if (!candidate) return null;
   const c = candidate.trim();
@@ -282,7 +315,12 @@ function normalizeRef(candidate, pageUrl, site) {
   try {
     const u = new URL(c, pageUrl);
     if (!/^https?:$/i.test(u.protocol)) return null;
-    if (`${u.protocol}//${u.host}` !== site.origin) return null;
+
+    const refOrigin = `${u.protocol}//${u.host}`;
+    const sameOrigin = refOrigin === site.origin;
+    const webflowAssetAllowed = isWebflowAssetHost(u.hostname);
+
+    if (!sameOrigin && !webflowAssetAllowed) return null;
     return u.toString();
   } catch {
     return null;
@@ -383,6 +421,12 @@ app.post('/api/compare', async (req, res) => {
     const siteInputA = normalizeSiteInput(req.body?.urlA);
     const siteInputB = normalizeSiteInput(req.body?.urlB);
     const webflowPassword = String(req.body?.passwordA || '');
+
+    logInfo('Compare request received', {
+      siteA: siteInputA.normalized,
+      siteB: siteInputB.normalized,
+      hasPasswordA: Boolean(webflowPassword.trim()),
+    });
 
     const siteFetchA = createSiteFetcher();
     const siteFetchB = createSiteFetcher();
@@ -492,6 +536,15 @@ app.post('/api/compare', async (req, res) => {
       failedAvailability: referenceRows.filter((r) => (r.inA && !r.availableA) || (r.inB && !r.availableB)).length,
       statusCodes: summarizeStatusCodes(referenceRows, 'statusA', 'statusB'),
     };
+
+    logInfo('Compare request complete', {
+      pageRows: rows.length,
+      refRows: referenceRows.length,
+      unlockAttempted: unlockResultA.attempted,
+      unlockOk: unlockResultA.unlocked,
+      failedAvailabilityPages: summary.failedAvailability,
+      failedAvailabilityRefs: referencesSummary.failedAvailability,
+    });
 
     res.json({
       input: {
