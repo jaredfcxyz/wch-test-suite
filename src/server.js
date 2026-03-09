@@ -124,10 +124,27 @@ async function fetchMeta(url, method = 'HEAD', siteFetch = fetch) {
   }
 }
 
-function extractHiddenField(html, fieldName, fallback = '') {
-  const rx = new RegExp(`<input[^>]*name=["']${fieldName}["'][^>]*value=["']([^"']*)["'][^>]*>`, 'i');
-  const match = String(html || '').match(rx);
-  return match?.[1] || fallback;
+function extractPasswordForm(html) {
+  const raw = String(html || '');
+  const formMatch = raw.match(/<form[^>]*w-password-page[^>]*>([\s\S]*?)<\/form>/i);
+  const formHtml = formMatch ? formMatch[0] : raw;
+
+  const actionMatch = formHtml.match(/<form[^>]*action=["']([^"']+)["']/i);
+  const passwordInputMatch = formHtml.match(/<input[^>]*type=["']password["'][^>]*\sname=["']([^"']+)["']/i)
+    || formHtml.match(/<input[^>]*\sname=["']([^"']+)["'][^>]*type=["']password["']/i);
+
+  const hiddenFields = {};
+  const hiddenRx = /<input[^>]*type=["']hidden["'][^>]*name=["']([^"']+)["'][^>]*value=["']([^"']*)["'][^>]*>/gi;
+  let m;
+  while ((m = hiddenRx.exec(formHtml)) !== null) {
+    hiddenFields[m[1]] = m[2];
+  }
+
+  return {
+    action: actionMatch?.[1] || '/.wf_auth',
+    passwordFieldName: passwordInputMatch?.[1] || 'pass',
+    hiddenFields,
+  };
 }
 
 async function unlockWebflowIfNeeded(site, password, siteFetch) {
@@ -136,17 +153,25 @@ async function unlockWebflowIfNeeded(site, password, siteFetch) {
 
   const startUrl = `${site.origin}${joinPath(site.basePath, '/')}`;
   const firstProbe = await fetchMeta(startUrl, 'GET', siteFetch);
-  const inferredPath = extractHiddenField(firstProbe.body, 'path', site.basePath || '/');
-  const inferredPage = extractHiddenField(firstProbe.body, 'page', '/');
-  const authUrl = `${site.origin}/.wf_auth`;
-  const body = new URLSearchParams({
+  const passwordForm = extractPasswordForm(firstProbe.body);
+  const authUrl = new URL(passwordForm.action || '/.wf_auth', site.origin).toString();
+  const fields = {
+    ...passwordForm.hiddenFields,
+    [passwordForm.passwordFieldName]: trimmed,
+    // Backward/forward compatibility for variants
     pass: trimmed,
     password: trimmed,
-    path: inferredPath,
-    page: inferredPage,
-  }).toString();
+  };
+  if (!fields.path) fields.path = site.basePath || '/';
+  if (!fields.page) fields.page = '/';
+  const body = new URLSearchParams(fields).toString();
 
-  logInfo('Webflow unlock attempt', { origin: site.origin, path: inferredPath });
+  logInfo('Webflow unlock attempt', {
+    origin: site.origin,
+    authUrl,
+    passwordField: passwordForm.passwordFieldName,
+    hiddenFields: Object.keys(passwordForm.hiddenFields),
+  });
 
   try {
     const authRes = await siteFetch(authUrl, {
