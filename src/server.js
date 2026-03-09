@@ -47,7 +47,7 @@ async function fetchText(url) {
     method: 'GET',
     redirect: 'follow',
     headers: {
-      'User-Agent': 'SitemapCopyVerifier/1.2 (+OpenClaw)',
+      'User-Agent': 'SitemapCopyVerifier/1.2.2 (+OpenClaw)',
       Accept: 'application/xml,text/xml,text/plain,*/*',
     },
   });
@@ -65,7 +65,7 @@ async function fetchMeta(url, method = 'HEAD') {
       method,
       redirect: 'follow',
       headers: {
-        'User-Agent': 'SitemapCopyVerifier/1.2 (+OpenClaw)',
+        'User-Agent': 'SitemapCopyVerifier/1.2.2 (+OpenClaw)',
       },
     });
 
@@ -215,6 +215,16 @@ function extractRefsFromHtml(html, pageUrl, site) {
   return refs;
 }
 
+
+function compareKeyForRef(url, type, site) {
+  if (type === 'asset') {
+    const u = new URL(url);
+    const parts = (u.pathname || '/').split('/').filter(Boolean);
+    return (parts.pop() || '/').toLowerCase();
+  }
+  return keyFromUrl(url, site.basePath, { includeQuery: false });
+}
+
 async function collectSiteReferences(site, sitemapUrls) {
   const refMap = new Map();
   const limiter = pLimit(8);
@@ -229,7 +239,7 @@ async function collectSiteReferences(site, sitemapUrls) {
         for (const r of refs) {
           // For refs we compare by path (ignore query) to avoid false "missing" results
           // caused by environment-specific cache-busting params.
-          const normalizedKey = keyFromUrl(r.url, site.basePath, { includeQuery: false });
+          const normalizedKey = compareKeyForRef(r.url, r.type, site);
           const key = `${r.type}:${normalizedKey}`;
           if (!refMap.has(key)) {
             refMap.set(key, { key: normalizedKey, type: r.type, urls: new Set([r.url]) });
@@ -397,7 +407,7 @@ app.post('/api/compare', async (req, res) => {
 });
 
 app.get('/health', (_req, res) => {
-  res.json({ ok: true, service: 'wch-test-suite', version: '1.2.1' });
+  res.json({ ok: true, service: 'wch-test-suite', version: '1.2.2' });
 });
 
 app.listen(PORT, () => {
