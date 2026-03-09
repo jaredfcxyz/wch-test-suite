@@ -35,6 +35,7 @@
       <div class="card">
         <div class="row">
           <input id="urlA" placeholder="https://webflow.io-site.com" />
+          <input id="passwordA" type="password" placeholder="Webflow password (optional)" />
           <input id="urlB" placeholder="https://your-wch-url.com/subdir/" />
           <button id="runBtn">Compare</button>
         </div>
@@ -66,6 +67,7 @@
       const runBtn = document.getElementById('runBtn');
       const urlAInput = document.getElementById('urlA');
       const urlBInput = document.getElementById('urlB');
+      const passwordAInput = document.getElementById('passwordA');
       const errorEl = document.getElementById('error');
       const summaryCard = document.getElementById('summaryCard');
       const sitemapCard = document.getElementById('sitemapCard');
@@ -80,14 +82,18 @@
 
       const LS_KEY_A = 'sitemapCopyVerifier.urlA';
       const LS_KEY_B = 'sitemapCopyVerifier.urlB';
+      const LS_KEY_PASSWORD_A = 'sitemapCopyVerifier.passwordA';
 
       const savedA = localStorage.getItem(LS_KEY_A);
       const savedB = localStorage.getItem(LS_KEY_B);
+      const savedPasswordA = localStorage.getItem(LS_KEY_PASSWORD_A);
       if (savedA) urlAInput.value = savedA;
       if (savedB) urlBInput.value = savedB;
+      if (savedPasswordA) passwordAInput.value = savedPasswordA;
 
       urlAInput.addEventListener('input', () => localStorage.setItem(LS_KEY_A, urlAInput.value.trim()));
       urlBInput.addEventListener('input', () => localStorage.setItem(LS_KEY_B, urlBInput.value.trim()));
+      passwordAInput.addEventListener('input', () => localStorage.setItem(LS_KEY_PASSWORD_A, passwordAInput.value));
 
       function esc(str) {
         return String(str ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
@@ -135,18 +141,33 @@
         try {
           const urlA = urlAInput.value.trim();
           const urlB = urlBInput.value.trim();
+          const passwordA = passwordAInput.value;
 
           const res = await fetch('/api/compare', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ urlA, urlB }),
+            body: JSON.stringify({ urlA, urlB, passwordA }),
           });
 
           const data = await res.json();
           if (!res.ok) throw new Error(data.error || 'Compare failed');
 
           const s = data.summary;
+          const issueItems = [];
+          if ((s.onlyInA || 0) > 0) issueItems.push(`${s.onlyInA} page path(s) exist only on Webflow.io`);
+          if ((s.onlyInB || 0) > 0) issueItems.push(`${s.onlyInB} page path(s) exist only on WCH URL`);
+          if ((s.failedAvailability || 0) > 0) issueItems.push(`${s.failedAvailability} availability failure(s) found (404/other non-OK responses)`);
+          if (data?.unlock?.siteA?.attempted && data?.unlock?.siteA?.unlocked === false) {
+            issueItems.push(`Webflow unlock failed: ${data.unlock.siteA.reason || 'unknown reason'}`);
+          }
+
           summaryCard.innerHTML = `
+            <h3>Issues First</h3>
+            <div class="meta">
+              ${issueItems.length
+                ? issueItems.map(msg => `<div class="pill"><span class="bad">ISSUE:</span> ${esc(msg)}</div>`).join('')
+                : '<div class="pill"><span class="ok">No issues detected.</span></div>'}
+            </div>
             <h3>Page Summary</h3>
             <div class="meta">
               <div class="pill">Total Path Keys: <strong>${s.totalKeys}</strong></div>

@@ -42,12 +42,47 @@ function joinPath(basePath, suffix) {
   return `${base}${cleanSuffix}`;
 }
 
-async function fetchText(url) {
-  const res = await fetch(url, {
+function parseAndStoreSetCookie(cookieStore, setCookieHeader = '') {
+  if (!setCookieHeader) return;
+  const pair = setCookieHeader.split(';')[0]?.trim();
+  if (!pair || !pair.includes('=')) return;
+  const [name, ...rest] = pair.split('=');
+  cookieStore.set(name.trim(), rest.join('=').trim());
+}
+
+function createSiteFetcher() {
+  const cookieStore = new Map();
+
+  async function siteFetch(url, options = {}) {
+    const headers = new Headers(options.headers || {});
+    const cookie = [...cookieStore.entries()].map(([k, v]) => `${k}=${v}`).join('; ');
+    if (cookie) headers.set('Cookie', cookie);
+
+    const res = await fetch(url, {
+      ...options,
+      headers,
+    });
+
+    const setCookies = typeof res.headers.getSetCookie === 'function'
+      ? res.headers.getSetCookie()
+      : (res.headers.get('set-cookie') ? [res.headers.get('set-cookie')] : []);
+
+    for (const raw of setCookies) {
+      parseAndStoreSetCookie(cookieStore, raw);
+    }
+
+    return res;
+  }
+
+  return siteFetch;
+}
+
+async function fetchText(url, siteFetch = fetch) {
+  const res = await siteFetch(url, {
     method: 'GET',
     redirect: 'follow',
     headers: {
-      'User-Agent': 'SitemapCopyVerifier/1.2.2 (+OpenClaw)',
+      'User-Agent': 'SitemapCopyVerifier/1.3.0 (+OpenClaw)',
       Accept: 'application/xml,text/xml,text/plain,*/*',
     },
   });
@@ -59,13 +94,13 @@ async function fetchText(url) {
   return await res.text();
 }
 
-async function fetchMeta(url, method = 'HEAD') {
+async function fetchMeta(url, method = 'HEAD', siteFetch = fetch) {
   try {
-    const res = await fetch(url, {
+    const res = await siteFetch(url, {
       method,
       redirect: 'follow',
       headers: {
-        'User-Agent': 'SitemapCopyVerifier/1.2.2 (+OpenClaw)',
+        'User-Agent': 'SitemapCopyVerifier/1.3.0 (+OpenClaw)',
       },
     });
 
@@ -80,7 +115,60 @@ async function fetchMeta(url, method = 'HEAD') {
   }
 }
 
-async function discoverSitemapUrls(site) {
+async function unlockWebflowIfNeeded(site, password, siteFetch) {
+  const trimmed = password?.trim();
+  if (!trimmed) return { attempted: false, unlocked: null, reason: null };
+
+  const authUrl = `${site.origin}/.wf_auth`;
+  const body = new URLSearchParams({
+    password: trimmed,
+    path: site.basePath || '/',
+  }).toString();
+
+  try {
+    await siteFetch(authUrl, {
+      method: 'POST',
+      redirect: 'follow',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': 'SitemapCopyVerifier/1.3.0 (+OpenClaw)',
+      },
+      body,
+    });
+  } catch {
+    return {
+      attempted: true,
+      unlocked: false,
+      reason: 'Failed to submit Webflow password',
+    };
+  }
+
+  const probe = await fetchMeta(`${site.origin}${joinPath(site.basePath, '/')}`, 'GET', siteFetch);
+  const bodyText = (probe.body || '').toLowerCase();
+  const stillLocked =
+    bodyText.includes('name="password"') &&
+    (bodyText.includes('w-password-page') || bodyText.includes('.wf_auth') || bodyText.includes('password protected'));
+
+  if (!probe.ok) {
+    return {
+      attempted: true,
+      unlocked: false,
+      reason: `Post-unlock probe failed with HTTP ${probe.status ?? 'unknown'}`,
+    };
+  }
+
+  if (stillLocked) {
+    return {
+      attempted: true,
+      unlocked: false,
+      reason: 'Password was submitted, but Webflow site still appears locked',
+    };
+  }
+
+  return { attempted: true, unlocked: true, reason: null };
+}
+
+async function discoverSitemapUrls(site, siteFetch) {
   const candidates = new Set([
     `${site.origin}/sitemap.xml`,
     `${site.origin}${joinPath(site.basePath, '/sitemap.xml')}`,
@@ -93,7 +181,7 @@ async function discoverSitemapUrls(site) {
 
   for (const robotsUrl of robotsCandidates) {
     try {
-      const robots = await fetchText(robotsUrl);
+      const robots = await fetchText(robotsUrl, siteFetch);
       const lines = robots.split(/\r?\n/);
       for (const line of lines) {
         const match = line.match(/^\s*Sitemap:\s*(\S+)/i);
@@ -112,8 +200,8 @@ function asArray(v) {
   return Array.isArray(v) ? v : [v];
 }
 
-async function collectSitemapUrls(site) {
-  const startSitemaps = await discoverSitemapUrls(site);
+async function collectSitemapUrls(site, siteFetch) {
+  const startSitemaps = await discoverSitemapUrls(site, siteFetch);
   const seenSitemaps = new Set();
   const foundUrls = new Set();
   const queue = [...startSitemaps];
@@ -124,7 +212,7 @@ async function collectSitemapUrls(site) {
     seenSitemaps.add(sitemapUrl);
 
     try {
-      const xml = await fetchText(sitemapUrl);
+      const xml = await fetchText(sitemapUrl, siteFetch);
       const json = parser.parse(xml);
 
       if (json?.sitemapindex?.sitemap) {
@@ -169,10 +257,10 @@ function keyFromUrl(rawUrl, siteBasePath = '/', options = {}) {
   return `${pathname}${search}`;
 }
 
-async function checkUrlAvailability(url) {
-  const head = await fetchMeta(url, 'HEAD');
+async function checkUrlAvailability(url, siteFetch) {
+  const head = await fetchMeta(url, 'HEAD', siteFetch);
   if (head.ok) return { status: head.status, ok: true };
-  const get = await fetchMeta(url, 'GET');
+  const get = await fetchMeta(url, 'GET', siteFetch);
   return { status: get.status, ok: get.ok };
 }
 
@@ -215,7 +303,6 @@ function extractRefsFromHtml(html, pageUrl, site) {
   return refs;
 }
 
-
 function compareKeyForRef(url, type, site) {
   if (type === 'asset') {
     const u = new URL(url);
@@ -225,20 +312,18 @@ function compareKeyForRef(url, type, site) {
   return keyFromUrl(url, site.basePath, { includeQuery: false });
 }
 
-async function collectSiteReferences(site, sitemapUrls) {
+async function collectSiteReferences(site, sitemapUrls, siteFetch) {
   const refMap = new Map();
   const limiter = pLimit(8);
 
   await Promise.all(
     sitemapUrls.map((pageUrl) =>
       limiter(async () => {
-        const page = await fetchMeta(pageUrl, 'GET');
+        const page = await fetchMeta(pageUrl, 'GET', siteFetch);
         if (!page.ok || !/text\/html/i.test(page.contentType) || !page.body) return;
 
         const refs = extractRefsFromHtml(page.body, pageUrl, site);
         for (const r of refs) {
-          // For refs we compare by path (ignore query) to avoid false "missing" results
-          // caused by environment-specific cache-busting params.
           const normalizedKey = compareKeyForRef(r.url, r.type, site);
           const key = `${r.type}:${normalizedKey}`;
           if (!refMap.has(key)) {
@@ -265,12 +350,12 @@ function summarizeStatusCodes(rows, statusFieldA, statusFieldB) {
   return tally;
 }
 
-async function checkBestAvailability(urlCandidates = []) {
+async function checkBestAvailability(urlCandidates = [], siteFetch) {
   if (!urlCandidates.length) return { status: null, ok: false, url: null };
 
   let best = { status: null, ok: false, url: urlCandidates[0] };
   for (const u of urlCandidates) {
-    const result = await checkUrlAvailability(u);
+    const result = await checkUrlAvailability(u, siteFetch);
     if (result.ok) return { ...result, url: u };
     if (best.status == null && result.status != null) best = { ...result, url: u };
   }
@@ -278,14 +363,35 @@ async function checkBestAvailability(urlCandidates = []) {
   return best;
 }
 
+function issueRank(row) {
+  if (!row.inA || !row.inB) return 0;
+  if (!row.availableA || !row.availableB) return 1;
+  if (!row.copySuccess) return 2;
+  return 9;
+}
+
+function sortIssuesFirst(rows) {
+  return [...rows].sort((a, b) => {
+    const rankDiff = issueRank(a) - issueRank(b);
+    if (rankDiff !== 0) return rankDiff;
+    return String(a.key || '').localeCompare(String(b.key || ''));
+  });
+}
+
 app.post('/api/compare', async (req, res) => {
   try {
     const siteInputA = normalizeSiteInput(req.body?.urlA);
     const siteInputB = normalizeSiteInput(req.body?.urlB);
+    const webflowPassword = String(req.body?.passwordA || '');
+
+    const siteFetchA = createSiteFetcher();
+    const siteFetchB = createSiteFetcher();
+
+    const unlockResultA = await unlockWebflowIfNeeded(siteInputA, webflowPassword, siteFetchA);
 
     const [siteA, siteB] = await Promise.all([
-      collectSitemapUrls(siteInputA),
-      collectSitemapUrls(siteInputB),
+      collectSitemapUrls(siteInputA, siteFetchA),
+      collectSitemapUrls(siteInputB, siteFetchB),
     ]);
 
     const mapA = new Map(siteA.urls.map((u) => [keyFromUrl(u, siteInputA.basePath), u]));
@@ -293,15 +399,15 @@ app.post('/api/compare', async (req, res) => {
     const allKeys = [...new Set([...mapA.keys(), ...mapB.keys()])].sort();
 
     const limiter = pLimit(12);
-    const rows = await Promise.all(
+    const unsortedRows = await Promise.all(
       allKeys.map((key) =>
         limiter(async () => {
           const urlA = mapA.get(key) || null;
           const urlB = mapB.get(key) || null;
 
           const [checkA, checkB] = await Promise.all([
-            urlA ? checkUrlAvailability(urlA) : Promise.resolve({ status: null, ok: false }),
-            urlB ? checkUrlAvailability(urlB) : Promise.resolve({ status: null, ok: false }),
+            urlA ? checkUrlAvailability(urlA, siteFetchA) : Promise.resolve({ status: null, ok: false }),
+            urlB ? checkUrlAvailability(urlB, siteFetchB) : Promise.resolve({ status: null, ok: false }),
           ]);
 
           return {
@@ -320,16 +426,18 @@ app.post('/api/compare', async (req, res) => {
       )
     );
 
+    const rows = sortIssuesFirst(unsortedRows);
+
     const [refsA, refsB] = await Promise.all([
-      collectSiteReferences(siteInputA, siteA.urls),
-      collectSiteReferences(siteInputB, siteB.urls),
+      collectSiteReferences(siteInputA, siteA.urls, siteFetchA),
+      collectSiteReferences(siteInputB, siteB.urls, siteFetchB),
     ]);
 
     const refMapA = new Map(refsA.map((r) => [`${r.type}:${r.key}`, r.urls]));
     const refMapB = new Map(refsB.map((r) => [`${r.type}:${r.key}`, r.urls]));
     const allRefKeys = [...new Set([...refMapA.keys(), ...refMapB.keys()])].sort();
 
-    const referenceRows = await Promise.all(
+    const unsortedReferenceRows = await Promise.all(
       allRefKeys.map((typedKey) =>
         limiter(async () => {
           const [type, key] = typedKey.split(':');
@@ -337,8 +445,8 @@ app.post('/api/compare', async (req, res) => {
           const urlsB = refMapB.get(typedKey) || [];
 
           const [checkA, checkB] = await Promise.all([
-            urlsA.length ? checkBestAvailability(urlsA) : Promise.resolve({ status: null, ok: false, url: null }),
-            urlsB.length ? checkBestAvailability(urlsB) : Promise.resolve({ status: null, ok: false, url: null }),
+            urlsA.length ? checkBestAvailability(urlsA, siteFetchA) : Promise.resolve({ status: null, ok: false, url: null }),
+            urlsB.length ? checkBestAvailability(urlsB, siteFetchB) : Promise.resolve({ status: null, ok: false, url: null }),
           ]);
 
           const urlA = checkA.url || urlsA[0] || null;
@@ -360,6 +468,8 @@ app.post('/api/compare', async (req, res) => {
         })
       )
     );
+
+    const referenceRows = sortIssuesFirst(unsortedReferenceRows);
 
     const summary = {
       totalKeys: allKeys.length,
@@ -390,6 +500,9 @@ app.post('/api/compare', async (req, res) => {
         basePathA: siteInputA.basePath,
         basePathB: siteInputB.basePath,
       },
+      unlock: {
+        siteA: unlockResultA,
+      },
       sitemaps: {
         siteA: siteA.sitemapFiles,
         siteB: siteB.sitemapFiles,
@@ -407,7 +520,7 @@ app.post('/api/compare', async (req, res) => {
 });
 
 app.get('/health', (_req, res) => {
-  res.json({ ok: true, service: 'wch-test-suite', version: '1.2.2' });
+  res.json({ ok: true, service: 'wch-test-suite', version: '1.3.0' });
 });
 
 app.listen(PORT, () => {
