@@ -7,7 +7,7 @@
     <style>
       :root { color-scheme: dark; }
       body { font-family: Inter, system-ui, sans-serif; margin: 0; background: #0b1220; color: #e5e7eb; }
-      .wrap { max-width: 1200px; margin: 0 auto; padding: 28px; }
+      .wrap { width: 100%; margin: 0; padding: 20px; box-sizing: border-box; }
       h1 { margin-top: 0; }
       .card { background: #111827; border: 1px solid #1f2937; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
       .row { display: flex; gap: 12px; flex-wrap: wrap; }
@@ -16,22 +16,21 @@
       button:disabled { opacity: .6; cursor: wait; }
       .meta { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
       .pill { background: #0f172a; border: 1px solid #374151; border-radius: 8px; padding: 8px 10px; font-size: 14px; }
-      table { width: 100%; border-collapse: collapse; font-size: 13px; }
-      th, td { border-bottom: 1px solid #1f2937; padding: 8px; text-align: left; vertical-align: top; }
-      th { position: sticky; top: 0; background: #111827; }
+      table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
+      th, td { border-bottom: 1px solid #1f2937; padding: 8px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+      th { background: #111827; }
       .ok { color: #4ade80; font-weight: 700; }
       .bad { color: #f87171; font-weight: 700; }
       .warn { color: #fbbf24; font-weight: 700; }
       .small { font-size: 12px; color: #9ca3af; }
       .error { color: #fecaca; background: #7f1d1d; border: 1px solid #991b1b; border-radius: 8px; padding: 10px; }
-      .scroll { overflow: auto; max-height: 70vh; }
       a { color: #93c5fd; }
     </style>
   </head>
   <body>
     <div class="wrap">
       <h1>WCH Test Suite</h1>
-      <p class="small">Compares sitemap URLs by normalized path key, then crawls pages to check internal links/assets and report status codes (200/404/etc).</p>
+      <p class="small">Compare Webflow.io and WCH URL pages, links, and assets with status codes.</p>
 
       <div class="card">
         <div class="row">
@@ -47,13 +46,19 @@
 
       <div id="tableCard" class="card" style="display:none">
         <h3>Page URL Comparison</h3>
-        <div class="scroll"><table id="resultsTable"></table></div>
+        <table id="resultsTable"></table>
       </div>
 
-      <div id="refSummaryCard" class="card" style="display:none"></div>
-      <div id="refTableCard" class="card" style="display:none">
-        <h3>Links & Assets Comparison</h3>
-        <div class="scroll"><table id="refsTable"></table></div>
+      <div id="linksSummaryCard" class="card" style="display:none"></div>
+      <div id="linksTableCard" class="card" style="display:none">
+        <h3>Links Comparison</h3>
+        <table id="linksTable"></table>
+      </div>
+
+      <div id="assetsSummaryCard" class="card" style="display:none"></div>
+      <div id="assetsTableCard" class="card" style="display:none">
+        <h3>Assets Comparison</h3>
+        <table id="assetsTable"></table>
       </div>
     </div>
 
@@ -66,9 +71,12 @@
       const sitemapCard = document.getElementById('sitemapCard');
       const tableCard = document.getElementById('tableCard');
       const table = document.getElementById('resultsTable');
-      const refSummaryCard = document.getElementById('refSummaryCard');
-      const refTableCard = document.getElementById('refTableCard');
-      const refsTable = document.getElementById('refsTable');
+      const linksSummaryCard = document.getElementById('linksSummaryCard');
+      const linksTableCard = document.getElementById('linksTableCard');
+      const linksTable = document.getElementById('linksTable');
+      const assetsSummaryCard = document.getElementById('assetsSummaryCard');
+      const assetsTableCard = document.getElementById('assetsTableCard');
+      const assetsTable = document.getElementById('assetsTable');
 
       const LS_KEY_A = 'sitemapCopyVerifier.urlA';
       const LS_KEY_B = 'sitemapCopyVerifier.urlB';
@@ -91,19 +99,42 @@
         return entries.map(([code, count]) => `<div class="pill">HTTP ${esc(code)}: <strong>${count}</strong></div>`).join('');
       }
 
+      function renderRefTable(targetTable, rows) {
+        targetTable.innerHTML = `
+          <thead>
+            <tr>
+              <th>Path Key</th><th>Webflow.io URL</th><th>WCH URL</th><th>Webflow Status</th><th>WCH Status</th><th>Copy Result</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map(r => `
+              <tr>
+                <td>${esc(r.key)}</td>
+                <td>${r.urlA ? `<a href="${esc(r.urlA)}" target="_blank">${esc(r.urlA)}</a>` : '<span class="warn">Missing</span>'}</td>
+                <td>${r.urlB ? `<a href="${esc(r.urlB)}" target="_blank">${esc(r.urlB)}</a>` : '<span class="warn">Missing</span>'}</td>
+                <td>${r.statusA ?? '-'} ${r.availableA ? '<span class="ok">OK</span>' : (r.inA ? '<span class="bad">FAIL</span>' : '')}</td>
+                <td>${r.statusB ?? '-'} ${r.availableB ? '<span class="ok">OK</span>' : (r.inB ? '<span class="bad">FAIL</span>' : '')}</td>
+                <td>${r.copySuccess ? '<span class="ok">SUCCESS</span>' : '<span class="bad">NOT MATCHED</span>'}</td>
+              </tr>`).join('')}
+          </tbody>
+        `;
+      }
+
       runBtn.addEventListener('click', async () => {
         errorEl.style.display = 'none';
         summaryCard.style.display = 'none';
         sitemapCard.style.display = 'none';
         tableCard.style.display = 'none';
-        refSummaryCard.style.display = 'none';
-        refTableCard.style.display = 'none';
+        linksSummaryCard.style.display = 'none';
+        linksTableCard.style.display = 'none';
+        assetsSummaryCard.style.display = 'none';
+        assetsTableCard.style.display = 'none';
         runBtn.disabled = true;
         runBtn.textContent = 'Comparing...';
 
         try {
-          const urlA = document.getElementById('urlA').value.trim();
-          const urlB = document.getElementById('urlB').value.trim();
+          const urlA = urlAInput.value.trim();
+          const urlB = urlBInput.value.trim();
 
           const res = await fetch('/api/compare', {
             method: 'POST',
@@ -162,42 +193,49 @@
           `;
           tableCard.style.display = 'block';
 
-          const rs = data.referencesSummary || {};
-          refSummaryCard.innerHTML = `
-            <h3>Links & Assets Summary (WCH URL Focus)</h3>
-            <div class="meta">
-              <div class="pill">Total Refs: <strong>${rs.totalRefs ?? 0}</strong></div>
-              <div class="pill">Links: <strong>${rs.totalLinks ?? 0}</strong></div>
-              <div class="pill">Assets: <strong>${rs.totalAssets ?? 0}</strong></div>
-              <div class="pill">Present in Both: <strong>${rs.presentInBoth ?? 0}</strong></div>
-              <div class="pill">Only in Webflow.io: <strong>${rs.onlyInA ?? 0}</strong></div>
-              <div class="pill">Only in WCH URL: <strong>${rs.onlyInB ?? 0}</strong></div>
-              <div class="pill">Copy Success: <strong>${rs.copySuccess ?? 0}</strong></div>
-              <div class="pill">Availability Failures: <strong>${rs.failedAvailability ?? 0}</strong></div>
-            </div>
-            <h4>Status Codes (links/assets)</h4>
-            <div class="meta">${statusPills(rs.statusCodes)}</div>
-          `;
-          refSummaryCard.style.display = 'block';
-
           const refRows = data.referenceRows || [];
-          refsTable.innerHTML = `
-            <thead>
-              <tr>
-                <th>Type</th><th>Path Key</th><th>Webflow.io URL</th><th>WCH URL</th><th>Webflow Status</th><th>WCH Status</th><th>Copy Result</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${refRows.filter(r => r.inB).map(r => `
-                <tr>
-                  <td>${esc(r.type)}</td>
-                  <td>${esc(r.key)}</td>
-                  <td>${r.urlB ? `<a href="${esc(r.urlB)}" target="_blank">${esc(r.urlB)}</a>` : '<span class="warn">Missing</span>'}</td>
-                  <td>${r.statusB ?? '-'} ${r.availableB ? '<span class="ok">OK</span>' : '<span class="bad">FAIL</span>'}</td>
-                </tr>`).join('')}
-            </tbody>
+          const linkRows = refRows.filter(r => r.type === 'link');
+          const assetRows = refRows.filter(r => r.type === 'asset');
+
+          const linkStatus = {};
+          for (const r of linkRows) {
+            if (r.statusA != null) linkStatus[r.statusA] = (linkStatus[r.statusA] || 0) + 1;
+            if (r.statusB != null) linkStatus[r.statusB] = (linkStatus[r.statusB] || 0) + 1;
+          }
+          linksSummaryCard.innerHTML = `
+            <h3>Links Summary</h3>
+            <div class="meta">
+              <div class="pill">Total Links: <strong>${linkRows.length}</strong></div>
+              <div class="pill">Only in Webflow.io: <strong>${linkRows.filter(r => r.inA && !r.inB).length}</strong></div>
+              <div class="pill">Only in WCH URL: <strong>${linkRows.filter(r => !r.inA && r.inB).length}</strong></div>
+              <div class="pill">Present in Both: <strong>${linkRows.filter(r => r.inA && r.inB).length}</strong></div>
+            </div>
+            <h4>Status Codes (links)</h4>
+            <div class="meta">${statusPills(linkStatus)}</div>
           `;
-          refTableCard.style.display = 'block';
+          linksSummaryCard.style.display = 'block';
+          renderRefTable(linksTable, linkRows);
+          linksTableCard.style.display = 'block';
+
+          const assetStatus = {};
+          for (const r of assetRows) {
+            if (r.statusA != null) assetStatus[r.statusA] = (assetStatus[r.statusA] || 0) + 1;
+            if (r.statusB != null) assetStatus[r.statusB] = (assetStatus[r.statusB] || 0) + 1;
+          }
+          assetsSummaryCard.innerHTML = `
+            <h3>Assets Summary</h3>
+            <div class="meta">
+              <div class="pill">Total Assets: <strong>${assetRows.length}</strong></div>
+              <div class="pill">Only in Webflow.io: <strong>${assetRows.filter(r => r.inA && !r.inB).length}</strong></div>
+              <div class="pill">Only in WCH URL: <strong>${assetRows.filter(r => !r.inA && r.inB).length}</strong></div>
+              <div class="pill">Present in Both: <strong>${assetRows.filter(r => r.inA && r.inB).length}</strong></div>
+            </div>
+            <h4>Status Codes (assets)</h4>
+            <div class="meta">${statusPills(assetStatus)}</div>
+          `;
+          assetsSummaryCard.style.display = 'block';
+          renderRefTable(assetsTable, assetRows);
+          assetsTableCard.style.display = 'block';
         } catch (err) {
           errorEl.textContent = err.message || 'Unknown error';
           errorEl.style.display = 'block';
