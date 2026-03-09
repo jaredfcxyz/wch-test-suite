@@ -83,6 +83,9 @@ function createSiteFetcher() {
     return res;
   }
 
+  siteFetch.getCookie = (name) => cookieStore.get(name);
+  siteFetch.getCookies = () => Object.fromEntries(cookieStore.entries());
+
   return siteFetch;
 }
 
@@ -176,15 +179,29 @@ async function unlockWebflowIfNeeded(site, password, siteFetch) {
   try {
     const authRes = await siteFetch(authUrl, {
       method: 'POST',
-      redirect: 'follow',
+      redirect: 'manual',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': 'SitemapCopyVerifier/1.3.1 (+OpenClaw)',
+        'User-Agent': 'SitemapCopyVerifier/1.3.2 (+OpenClaw)',
         Referer: startUrl,
+        Origin: site.origin,
       },
       body,
     });
-    logInfo('Webflow unlock POST response', { status: authRes.status });
+
+    const wfAuthCookie = siteFetch.getCookie?.('wf_auth') || '';
+    const hasValidAuthCookie = Boolean(wfAuthCookie) && wfAuthCookie !== 'deleted';
+
+    logInfo('Webflow unlock POST response', {
+      status: authRes.status,
+      location: authRes.headers.get('location') || null,
+      hasValidAuthCookie,
+    });
+
+    if (hasValidAuthCookie) {
+      logInfo('Webflow unlock success via wf_auth cookie', { origin: site.origin });
+      return { attempted: true, unlocked: true, reason: null };
+    }
   } catch (error) {
     logInfo('Webflow unlock POST failed', { error: error?.message || 'unknown' });
     return {
