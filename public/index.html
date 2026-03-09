@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sitemap Copy Verifier</title>
+    <style>
+      :root { color-scheme: dark; }
+      body { font-family: Inter, system-ui, sans-serif; margin: 0; background: #0b1220; color: #e5e7eb; }
+      .wrap { max-width: 1200px; margin: 0 auto; padding: 28px; }
+      h1 { margin-top: 0; }
+      .card { background: #111827; border: 1px solid #1f2937; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+      .row { display: flex; gap: 12px; flex-wrap: wrap; }
+      input { flex: 1; min-width: 260px; background: #0f172a; color: #e5e7eb; border: 1px solid #374151; border-radius: 8px; padding: 10px 12px; }
+      button { background: #22c55e; color: #052e16; border: 0; border-radius: 8px; padding: 10px 14px; font-weight: 700; cursor: pointer; }
+      button:disabled { opacity: .6; cursor: wait; }
+      .meta { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
+      .pill { background: #0f172a; border: 1px solid #374151; border-radius: 8px; padding: 8px 10px; font-size: 14px; }
+      table { width: 100%; border-collapse: collapse; font-size: 13px; }
+      th, td { border-bottom: 1px solid #1f2937; padding: 8px; text-align: left; vertical-align: top; }
+      th { position: sticky; top: 0; background: #111827; }
+      .ok { color: #4ade80; font-weight: 700; }
+      .bad { color: #f87171; font-weight: 700; }
+      .warn { color: #fbbf24; font-weight: 700; }
+      .small { font-size: 12px; color: #9ca3af; }
+      .error { color: #fecaca; background: #7f1d1d; border: 1px solid #991b1b; border-radius: 8px; padding: 10px; }
+      .scroll { overflow: auto; max-height: 70vh; }
+      a { color: #93c5fd; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Sitemap Copy Verifier</h1>
+      <p class="small">Compares sitemap URLs by normalized path key, then crawls pages to check internal links/assets and report status codes (200/404/etc).</p>
+
+      <div class="card">
+        <div class="row">
+          <input id="urlA" placeholder="https://site-a.com" />
+          <input id="urlB" placeholder="https://site-b.com/subdir/" />
+          <button id="runBtn">Compare</button>
+        </div>
+      </div>
+
+      <div id="error" style="display:none" class="error"></div>
+      <div id="summaryCard" class="card" style="display:none"></div>
+      <div id="sitemapCard" class="card" style="display:none"></div>
+
+      <div id="tableCard" class="card" style="display:none">
+        <h3>Page URL Comparison</h3>
+        <div class="scroll"><table id="resultsTable"></table></div>
+      </div>
+
+      <div id="refSummaryCard" class="card" style="display:none"></div>
+      <div id="refTableCard" class="card" style="display:none">
+        <h3>Links & Assets Comparison</h3>
+        <div class="scroll"><table id="refsTable"></table></div>
+      </div>
+    </div>
+
+    <script>
+      const runBtn = document.getElementById('runBtn');
+      const urlAInput = document.getElementById('urlA');
+      const urlBInput = document.getElementById('urlB');
+      const errorEl = document.getElementById('error');
+      const summaryCard = document.getElementById('summaryCard');
+      const sitemapCard = document.getElementById('sitemapCard');
+      const tableCard = document.getElementById('tableCard');
+      const table = document.getElementById('resultsTable');
+      const refSummaryCard = document.getElementById('refSummaryCard');
+      const refTableCard = document.getElementById('refTableCard');
+      const refsTable = document.getElementById('refsTable');
+
+      const LS_KEY_A = 'sitemapCopyVerifier.urlA';
+      const LS_KEY_B = 'sitemapCopyVerifier.urlB';
+
+      const savedA = localStorage.getItem(LS_KEY_A);
+      const savedB = localStorage.getItem(LS_KEY_B);
+      if (savedA) urlAInput.value = savedA;
+      if (savedB) urlBInput.value = savedB;
+
+      urlAInput.addEventListener('input', () => localStorage.setItem(LS_KEY_A, urlAInput.value.trim()));
+      urlBInput.addEventListener('input', () => localStorage.setItem(LS_KEY_B, urlBInput.value.trim()));
+
+      function esc(str) {
+        return String(str ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+      }
+
+      function statusPills(statusCodes = {}) {
+        const entries = Object.entries(statusCodes).sort((a, b) => Number(a[0]) - Number(b[0]));
+        if (!entries.length) return '<div class="pill">No status codes captured</div>';
+        return entries.map(([code, count]) => `<div class="pill">HTTP ${esc(code)}: <strong>${count}</strong></div>`).join('');
+      }
+
+      runBtn.addEventListener('click', async () => {
+        errorEl.style.display = 'none';
+        summaryCard.style.display = 'none';
+        sitemapCard.style.display = 'none';
+        tableCard.style.display = 'none';
+        refSummaryCard.style.display = 'none';
+        refTableCard.style.display = 'none';
+        runBtn.disabled = true;
+        runBtn.textContent = 'Comparing...';
+
+        try {
+          const urlA = document.getElementById('urlA').value.trim();
+          const urlB = document.getElementById('urlB').value.trim();
+
+          const res = await fetch('/api/compare', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ urlA, urlB }),
+          });
+
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || 'Compare failed');
+
+          const s = data.summary;
+          summaryCard.innerHTML = `
+            <h3>Page Summary</h3>
+            <div class="meta">
+              <div class="pill">Total Path Keys: <strong>${s.totalKeys}</strong></div>
+              <div class="pill">Present in Both: <strong>${s.presentInBoth}</strong></div>
+              <div class="pill">Only in Site A: <strong>${s.onlyInA}</strong></div>
+              <div class="pill">Only in Site B: <strong>${s.onlyInB}</strong></div>
+              <div class="pill">Copy Success Rows: <strong>${s.copySuccess}</strong></div>
+              <div class="pill">Availability Failures: <strong>${s.failedAvailability}</strong></div>
+            </div>
+            <h4>Status Codes (pages)</h4>
+            <div class="meta">${statusPills(s.statusCodes)}</div>
+          `;
+          summaryCard.style.display = 'block';
+
+          const aMap = (data.sitemaps.siteA || []).map(u => `<li><a href="${esc(u)}" target="_blank">${esc(u)}</a></li>`).join('');
+          const bMap = (data.sitemaps.siteB || []).map(u => `<li><a href="${esc(u)}" target="_blank">${esc(u)}</a></li>`).join('');
+          sitemapCard.innerHTML = `
+            <h3>Sitemaps Checked</h3>
+            <div class="row">
+              <div style="flex:1;min-width:300px"><strong>Site A</strong><ul>${aMap || '<li>None found</li>'}</ul></div>
+              <div style="flex:1;min-width:300px"><strong>Site B</strong><ul>${bMap || '<li>None found</li>'}</ul></div>
+            </div>
+          `;
+          sitemapCard.style.display = 'block';
+
+          const rows = data.rows || [];
+          table.innerHTML = `
+            <thead>
+              <tr>
+                <th>Path Key</th><th>Site A URL</th><th>Site B URL</th><th>A Status</th><th>B Status</th><th>Copy Result</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.map(r => `
+                <tr>
+                  <td>${esc(r.key)}</td>
+                  <td>${r.urlA ? `<a href="${esc(r.urlA)}" target="_blank">${esc(r.urlA)}</a>` : '<span class="warn">Missing</span>'}</td>
+                  <td>${r.urlB ? `<a href="${esc(r.urlB)}" target="_blank">${esc(r.urlB)}</a>` : '<span class="warn">Missing</span>'}</td>
+                  <td>${r.statusA ?? '-'} ${r.availableA ? '<span class="ok">OK</span>' : (r.inA ? '<span class="bad">FAIL</span>' : '')}</td>
+                  <td>${r.statusB ?? '-'} ${r.availableB ? '<span class="ok">OK</span>' : (r.inB ? '<span class="bad">FAIL</span>' : '')}</td>
+                  <td>${r.copySuccess ? '<span class="ok">SUCCESS</span>' : '<span class="bad">NOT MATCHED</span>'}</td>
+                </tr>`).join('')}
+            </tbody>
+          `;
+          tableCard.style.display = 'block';
+
+          const rs = data.referencesSummary || {};
+          refSummaryCard.innerHTML = `
+            <h3>Links & Assets Summary</h3>
+            <div class="meta">
+              <div class="pill">Total Refs: <strong>${rs.totalRefs ?? 0}</strong></div>
+              <div class="pill">Links: <strong>${rs.totalLinks ?? 0}</strong></div>
+              <div class="pill">Assets: <strong>${rs.totalAssets ?? 0}</strong></div>
+              <div class="pill">Present in Both: <strong>${rs.presentInBoth ?? 0}</strong></div>
+              <div class="pill">Only in Site A: <strong>${rs.onlyInA ?? 0}</strong></div>
+              <div class="pill">Only in Site B: <strong>${rs.onlyInB ?? 0}</strong></div>
+              <div class="pill">Copy Success: <strong>${rs.copySuccess ?? 0}</strong></div>
+              <div class="pill">Availability Failures: <strong>${rs.failedAvailability ?? 0}</strong></div>
+            </div>
+            <h4>Status Codes (links/assets)</h4>
+            <div class="meta">${statusPills(rs.statusCodes)}</div>
+          `;
+          refSummaryCard.style.display = 'block';
+
+          const refRows = data.referenceRows || [];
+          refsTable.innerHTML = `
+            <thead>
+              <tr>
+                <th>Type</th><th>Path Key</th><th>Site A URL</th><th>Site B URL</th><th>A Status</th><th>B Status</th><th>Copy Result</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${refRows.map(r => `
+                <tr>
+                  <td>${esc(r.type)}</td>
+                  <td>${esc(r.key)}</td>
+                  <td>${r.urlA ? `<a href="${esc(r.urlA)}" target="_blank">${esc(r.urlA)}</a>` : '<span class="warn">Missing</span>'}</td>
+                  <td>${r.urlB ? `<a href="${esc(r.urlB)}" target="_blank">${esc(r.urlB)}</a>` : '<span class="warn">Missing</span>'}</td>
+                  <td>${r.statusA ?? '-'} ${r.availableA ? '<span class="ok">OK</span>' : (r.inA ? '<span class="bad">FAIL</span>' : '')}</td>
+                  <td>${r.statusB ?? '-'} ${r.availableB ? '<span class="ok">OK</span>' : (r.inB ? '<span class="bad">FAIL</span>' : '')}</td>
+                  <td>${r.copySuccess ? '<span class="ok">SUCCESS</span>' : '<span class="bad">NOT MATCHED</span>'}</td>
+                </tr>`).join('')}
+            </tbody>
+          `;
+          refTableCard.style.display = 'block';
+        } catch (err) {
+          errorEl.textContent = err.message || 'Unknown error';
+          errorEl.style.display = 'block';
+        } finally {
+          runBtn.disabled = false;
+          runBtn.textContent = 'Compare';
+        }
+      });
+    </script>
+  </body>
+</html>

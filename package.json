@@ -1,0 +1,16 @@
+{
+  "name": "sitemap-copy-verifier",
+  "version": "1.0.0",
+  "description": "Compare two websites using sitemap URLs and path-based verification",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "fast-xml-parser": "^4.5.1",
+    "p-limit": "^6.2.0"
+  }
+}
